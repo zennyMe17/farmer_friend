@@ -11,8 +11,7 @@ from typing import List, Dict, Any
 
 # Load environment variables
 load_dotenv()
-WEATHER_API_KEY = "c8038b38b6be4e6c9a540208251505"
-LOCATION = "Bengaluru" # Remembered location from previous context
+WEATHER_API_KEY = "c8038b38b6be4e6c9a540208251505" # Good practice to get from env
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -70,6 +69,8 @@ def get_weather(api_key: str, location: str) -> tuple[float, float]:
     except requests.exceptions.RequestException as e:
         print(f"Error fetching weather data for {location}: {e}")
         # Fallback to default values if API call fails
+        # Consider a more robust error handling for production (e.g., logging, default to average, etc.)
+        # For this example, we'll return fixed values
         return 25.0, 60.0
 
 # --- Pydantic Model for Request Body (defines what frontend sends) ---
@@ -78,6 +79,7 @@ class SoilInput(BaseModel):
     potassium: int
     phosphorous: int
     soil_type: str
+    location: str # New: Add location to the input model
 
 # --- Startup Event: Load models and preprocessors only once when the app starts ---
 @app.on_event("startup")
@@ -95,7 +97,7 @@ async def load_all_models():
         encoder = joblib.load(os.path.join(models_dir, 'encoder.joblib'))
         numeric_cols = joblib.load(os.path.join(models_dir, 'numeric_cols.joblib'))
         categorical_cols = joblib.load(os.path.join(models_dir, 'categorical_cols.joblib'))
-        input_cols = joblib.load(os.path.join(models_dir, 'input_cols.joblib')) # This might not be strictly needed if we derive order from numeric_cols + encoded_cols
+        input_cols = joblib.load(os.path.join(models_dir, 'input_cols.joblib'))
         print("Models and preprocessors loaded successfully!")
     except FileNotFoundError as e:
         print(f"ERROR: Model file not found - {e}. Ensure 'models/' directory is correctly placed and contains all .joblib files.")
@@ -111,10 +113,11 @@ async def get_soil_types():
         raise HTTPException(status_code=500, detail="Models not loaded yet.")
     
     try:
+        # Assuming 'Soil Type' is one of the categorical columns used in encoding
         soil_type_idx = categorical_cols.index('Soil Type')
         return encoder.categories_[soil_type_idx].tolist()
     except ValueError:
-        raise HTTPException(status_code=500, detail="'Soil Type' not found in categorical columns for encoding.")
+        raise HTTPException(status_code=500, detail="'Soil Type' not found in categorical columns for encoding. Ensure your `categorical_cols.joblib` includes 'Soil Type'.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving soil types: {e}")
 
@@ -124,8 +127,8 @@ async def predict(soil_input: SoilInput):
     if any(m is None for m in [model_crop_type, model_fertilizer_name, imputer, scaler, encoder, numeric_cols, categorical_cols]):
         raise HTTPException(status_code=500, detail="Models not loaded yet. Server might be starting or encountered an error.")
 
-    # 1. Get live weather data
-    temperature, humidity = get_weather(WEATHER_API_KEY, LOCATION)
+    # 1. Get live weather data using the provided location
+    temperature, humidity = get_weather(WEATHER_API_KEY, soil_input.location) # Use soil_input.location
     moisture = estimate_moisture(humidity)
 
     # 2. Create raw input DataFrame
@@ -177,10 +180,3 @@ async def predict(soil_input: SoilInput):
         "predicted_crop_type": predicted_crop_type,
         "predicted_fertilizer_name": predicted_fertilizer_name
     }
-
-# To run the backend:
-# Navigate to the 'backend' directory in your terminal.
-# Install dependencies: pip install -r requirements.txt
-# Run the server: uvicorn main:app --reload --host 0.0.0.0 --port 8000
-# The --reload flag is for development, it reloads on code changes.
-# The --host 0.0.0.0 allows access from outside localhost (e.g. if you're on a network or docker)
