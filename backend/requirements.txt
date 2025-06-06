@@ -1,5 +1,7 @@
-Flask
+fastapi[all]
+uvicorn
 pandas
 numpy
 scikit-learn
-joblib
+requests
+python-dotenv
